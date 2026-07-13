@@ -292,7 +292,7 @@ async function handleQuestion(rawText){
 
 /* ============ RECONOCIMIENTO DE VOZ CONTINUO ============ */
 let recognition = null;
-let currentUtterance = '';
+let restartTimer = null;
 
 function setupRecognition(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -302,56 +302,44 @@ function setupRecognition(){
   }
   const r = new SR();
   r.lang = 'es-ES';
-  r.continuous = true;
+  r.continuous = false;      // el modo continuo de Chrome/Android repite y acumula texto - lo evitamos
   r.interimResults = true;
   r.maxAlternatives = 1;
 
   r.onresult = (event) => {
+    let finalText = '';
     let interim = '';
-    for(let i = event.resultIndex; i < event.results.length; i++){
+    // Con continuous=false cada sesión empieza en índice 0: no hay arrastre de sesiones anteriores
+    for(let i = 0; i < event.results.length; i++){
       const res = event.results[i];
-      if(res.isFinal){
-        currentUtterance += (currentUtterance ? ' ' : '') + res[0].transcript.trim();
-        scheduleFlush();
-      } else {
-        interim += res[0].transcript;
-      }
+      if(res.isFinal) finalText += res[0].transcript;
+      else interim += res[0].transcript;
     }
     document.getElementById('transcript').innerHTML =
-      (currentUtterance ? '<b>' + escapeHtml(currentUtterance) + '</b> ' : '') +
-      escapeHtml(interim);
-    scheduleFlush(true);
+      (finalText ? '<b>' + escapeHtml(finalText) + '</b> ' : '') + escapeHtml(interim);
+
+    if(finalText.trim().length > 0){
+      const text = finalText.trim();
+      handleQuestion(text);
+    }
   };
 
   r.onerror = (e) => {
     console.warn('SR error', e.error);
-    if(e.error === 'no-speech' || e.error === 'network'){
-      // se reinicia solo
-    }
+    // 'no-speech' y 'aborted' son normales al reiniciar constantemente, se ignoran
   };
 
   r.onend = () => {
+    // Reinicia casi al instante para no perder ninguna pregunta
     if(state.listening){
-      try{ r.start(); }catch(e){}
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        try{ r.start(); }catch(e){}
+      }, 80);
     }
   };
 
   return r;
-}
-
-// Envía la frase acumulada tras una pausa corta de silencio (permite frases seguidas)
-let flushTimer = null;
-function scheduleFlush(soft){
-  clearTimeout(flushTimer);
-  const delay = soft ? 900 : 600;
-  flushTimer = setTimeout(() => {
-    if(currentUtterance.trim().length > 0){
-      const text = currentUtterance.trim();
-      currentUtterance = '';
-      document.getElementById('transcript').innerHTML = '<b>' + escapeHtml(text) + '</b>';
-      handleQuestion(text);
-    }
-  }, delay);
 }
 
 /* ============ CONTROLES ============ */
@@ -384,6 +372,7 @@ async function setListening(on){
     btn.classList.remove('off');
   } else {
     state.listening = false;
+    clearTimeout(restartTimer);
     if(recognition){ try{ recognition.stop(); }catch(e){} }
     pill.className = 'status-pill off';
     document.getElementById('statusText').textContent = 'Apagado';
