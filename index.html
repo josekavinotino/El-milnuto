@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>El Minuto — Asistente</title>
+<style>
+  :root{
+    --bg:#0a0a0f;
+    --panel:#131319;
+    --panel-edge:#22222c;
+    --pink:#ff1f6d;
+    --pink-dim:#7a0f34;
+    --yellow:#ffcc33;
+    --green:#2be37a;
+    --grey:#4a4a58;
+    --text:#f4f4f8;
+    --text-dim:#8c8c9c;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+    overflow-x:hidden;
+    user-select:none;
+  }
+  #app{
+    min-height:100vh;
+    display:flex; flex-direction:column;
+    padding:14px 14px calc(14px + env(safe-area-inset-bottom));
+  }
+
+  /* ---- Header ---- */
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:10px;
+  }
+  .brand{
+    font-weight:900; font-size:15px; letter-spacing:0.5px;
+    color:var(--pink); text-transform:uppercase;
+  }
+  .status-pill{
+    font-size:11px; font-weight:700; padding:5px 10px; border-radius:20px;
+    text-transform:uppercase; letter-spacing:0.5px;
+    display:flex; align-items:center; gap:6px;
+    border:1px solid var(--panel-edge);
+    color:var(--text-dim);
+  }
+  .status-pill .dot{width:7px; height:7px; border-radius:50%; background:var(--grey);}
+  .status-pill.live .dot{background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 1.4s infinite;}
+  .status-pill.off .dot{background:#e34b4b;}
+  @keyframes pulse{0%,100%{opacity:1} 50%{opacity:.35}}
+
+  /* ---- Live transcript strip ---- */
+  #transcript{
+    background:var(--panel); border:1px solid var(--panel-edge);
+    border-radius:10px; padding:8px 12px; margin-bottom:10px;
+    font-size:13px; color:var(--text-dim); min-height:18px;
+    line-height:1.35;
+  }
+  #transcript b{color:var(--text); font-weight:600;}
+
+  /* ---- Grid ---- */
+  #grid{
+    display:grid; grid-template-columns:1fr; gap:7px;
+    flex:1;
+  }
+  .slot{
+    background:var(--panel); border:1px solid var(--panel-edge);
+    border-radius:12px; padding:10px 12px;
+    display:flex; align-items:center; gap:10px;
+    min-height:52px;
+    transition:border-color .2s, background .2s;
+  }
+  .slot.current{border-color:var(--pink); box-shadow:0 0 0 1px var(--pink) inset;}
+  .slot .num{
+    font-weight:900; font-size:14px; color:var(--text-dim);
+    width:20px; flex-shrink:0; text-align:center;
+  }
+  .slot.answered .num{color:var(--green);}
+  .slot.pass .num{color:#e39b2b;}
+  .slot .content{flex:1; min-width:0;}
+  .slot .q{
+    font-size:10.5px; color:var(--text-dim); line-height:1.2;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .slot .a{
+    font-size:19px; font-weight:800; line-height:1.15; margin-top:1px;
+    word-break:break-word;
+  }
+  .slot.empty .a{color:#3a3a46; font-weight:600; font-size:14px;}
+  .slot.thinking .a{color:var(--yellow);}
+  .slot.answered .a{color:var(--text);}
+  .slot.pass .a{color:#e39b2b;}
+  .badge{
+    font-size:10px; font-weight:800; padding:2px 7px; border-radius:6px;
+    flex-shrink:0; text-transform:uppercase;
+  }
+  .badge.round2{background:var(--pink-dim); color:#ff9ec4;}
+
+  /* ---- Controls ---- */
+  #controls{
+    display:flex; gap:8px; margin-top:12px;
+  }
+  button{
+    flex:1; border:none; border-radius:12px; padding:14px 8px;
+    font-weight:800; font-size:14px; letter-spacing:0.3px;
+    cursor:pointer; text-transform:uppercase;
+  }
+  #btn-mic{background:var(--pink); color:#fff;}
+  #btn-mic.off{background:var(--panel); color:var(--text-dim); border:1px solid var(--panel-edge);}
+  #btn-pass{background:var(--panel); color:#e39b2b; border:1px solid #4a3419;}
+  #btn-reset{background:var(--panel); color:var(--text-dim); border:1px solid var(--panel-edge); flex:0.6;}
+
+  #hint{
+    font-size:11px; color:var(--text-dim); text-align:center; margin-top:8px;
+    line-height:1.4;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">El Minuto</div>
+    <div class="status-pill off" id="statusPill"><span class="dot"></span><span id="statusText">Apagado</span></div>
+  </header>
+
+  <div id="transcript">Pulsa <b>Escuchar</b> para empezar.</div>
+
+  <div id="grid"></div>
+
+  <div id="controls">
+    <button id="btn-reset">Nueva ronda</button>
+    <button id="btn-pass">Paso</button>
+    <button id="btn-mic" class="off">Escuchar</button>
+  </div>
+  <div id="hint">El micro debe captar el altavoz del móvil de la llamada. Round 2 reintenta automáticamente las preguntas en "paso".</div>
+</div>
+
+<script>
+/* ============ ESTADO ============ */
+const state = {
+  slots: [], // {question, answer, status: 'empty'|'thinking'|'answered'|'pass', round}
+  listening: false,
+  currentSlotIndex: -1,
+  pendingSend: null,
+  silenceTimer: null,
+  round: 1,
+};
+const MAX_SLOTS_ROUND1 = 10;
+
+function resetState(){
+  state.slots = Array.from({length: MAX_SLOTS_ROUND1}, () => ({question:'', answer:'', status:'empty', round:1}));
+  state.round = 1;
+  state.currentSlotIndex = -1;
+  renderGrid();
+}
+resetState();
+
+/* ============ RENDER ============ */
+function renderGrid(){
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  state.slots.forEach((slot, i) => {
+    const el = document.createElement('div');
+    el.className = 'slot ' + slot.status + (i === state.currentSlotIndex ? ' current' : '');
+    const roundBadge = slot.round === 2 ? '<span class="badge round2">R2</span>' : '';
+    let answerText = '—';
+    if(slot.status === 'thinking') answerText = 'Pensando…';
+    else if(slot.status === 'answered') answerText = slot.answer;
+    else if(slot.status === 'pass') answerText = 'PASO';
+    el.innerHTML = `
+      <div class="num">${i+1}</div>
+      <div class="content">
+        <div class="q">${slot.question ? escapeHtml(slot.question) : ''}</div>
+        <div class="a">${escapeHtml(answerText)}</div>
+      </div>
+      ${roundBadge}
+    `;
+    grid.appendChild(el);
+  });
+}
+function escapeHtml(s){
+  const d = document.createElement('div'); d.innerText = s; return d.innerHTML;
+}
+
+/* ============ ROUTER: clasificación heurística ============ */
+const META_KEYWORDS = [
+  'el programa','ayer contamos','ayer hablamos','en el programa','salseos',
+  'tiempo divertido','show en directo','próximo show','miembro del programa',
+  'terminó de estudiar','discusiones al mes que contamos','a qué piloto imitamos',
+  'de qué dos futbolistas hablamos'
+];
+function isMetaQuestion(text){
+  const t = text.toLowerCase();
+  return META_KEYWORDS.some(k => t.includes(k));
+}
+
+/* ============ EMPAREJAR CON RONDA 2 ============ */
+function wordSet(s){
+  return new Set(s.toLowerCase().replace(/[¿?¡!.,]/g,'').split(/\s+/).filter(w => w.length > 3));
+}
+function similarity(a, b){
+  const A = wordSet(a), B = wordSet(b);
+  if(A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for(const w of A) if(B.has(w)) inter++;
+  return inter / Math.min(A.size, B.size);
+}
+function findMatchingPassSlot(questionText){
+  let best = -1, bestScore = 0;
+  state.slots.forEach((slot, i) => {
+    if(slot.status === 'pass'){
+      const score = similarity(slot.question, questionText);
+      if(score > bestScore){ bestScore = score; best = i; }
+    }
+  });
+  return bestScore >= 0.4 ? best : -1;
+}
+
+/* ============ AVANZAR SLOT ============ */
+function nextSlotFor(questionText){
+  const matchIdx = findMatchingPassSlot(questionText);
+  if(matchIdx !== -1) return matchIdx;
+  const emptyIdx = state.slots.findIndex(s => s.status === 'empty');
+  if(emptyIdx !== -1) return emptyIdx;
+  // Todas llenas -> segunda vuelta general: añade slot extra
+  state.slots.push({question:'', answer:'', status:'empty', round: state.round});
+  return state.slots.length - 1;
+}
+
+/* ============ LLAMADA A CLAUDE ============ */
+async function askClaude(questionText){
+  const system = `Eres el asistente de un concursante en "El Minuto" de KISS FM (España), un concurso de cultura general a toda velocidad.
+Reglas de respuesta:
+- Responde ÚNICAMENTE con la respuesta más probable, nada más. Sin explicaciones, sin frases completas.
+- Máximo 4 palabras. Si es un nombre, solo el nombre. Si es sí/no, responde "Sí" o "No".
+- Si la pregunta da dos opciones ("¿Es X o Y?"), una de las dos suele ser inventada/absurda y la otra real: responde la que exista de verdad.
+- Si es una pregunta sobre el propio programa de radio, sus presentadores, anécdotas internas de "ayer" o "el show en directo" que no puedes conocer, responde exactamente: "SIN DATOS".
+- Si no tienes ninguna certeza razonable, responde "SIN DATOS" en vez de inventar.
+- Idioma: español de España.`;
+
+  try{
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 40,
+        system: system,
+        messages: [{ role: "user", content: questionText }]
+      })
+    });
+    const data = await response.json();
+    const textBlock = (data.content || []).find(b => b.type === 'text');
+    return textBlock ? textBlock.text.trim() : 'SIN DATOS';
+  }catch(e){
+    console.error(e);
+    return 'ERROR';
+  }
+}
+
+/* ============ PROCESAR UNA PREGUNTA DETECTADA ============ */
+async function handleQuestion(rawText){
+  const questionText = rawText.trim();
+  if(questionText.length < 4) return;
+
+  const idx = nextSlotFor(questionText);
+  state.currentSlotIndex = idx;
+  state.slots[idx].question = questionText;
+  state.slots[idx].status = 'thinking';
+  state.slots[idx].round = state.round;
+  renderGrid();
+
+  let answer;
+  if(isMetaQuestion(questionText)){
+    answer = 'SIN DATOS';
+  } else {
+    answer = await askClaude(questionText);
+  }
+
+  if(answer === 'SIN DATOS' || answer === 'ERROR' || answer === ''){
+    state.slots[idx].status = 'pass';
+    state.slots[idx].answer = answer === 'ERROR' ? 'Error, reintenta' : 'Sin datos';
+  } else {
+    state.slots[idx].status = 'answered';
+    state.slots[idx].answer = answer;
+  }
+  renderGrid();
+}
+
+/* ============ RECONOCIMIENTO DE VOZ CONTINUO ============ */
+let recognition = null;
+let currentUtterance = '';
+
+function setupRecognition(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){
+    document.getElementById('transcript').innerHTML = '⚠️ Este navegador no soporta reconocimiento de voz. Usa Chrome en Android.';
+    return null;
+  }
+  const r = new SR();
+  r.lang = 'es-ES';
+  r.continuous = true;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+
+  r.onresult = (event) => {
+    let interim = '';
+    for(let i = event.resultIndex; i < event.results.length; i++){
+      const res = event.results[i];
+      if(res.isFinal){
+        currentUtterance += (currentUtterance ? ' ' : '') + res[0].transcript.trim();
+        scheduleFlush();
+      } else {
+        interim += res[0].transcript;
+      }
+    }
+    document.getElementById('transcript').innerHTML =
+      (currentUtterance ? '<b>' + escapeHtml(currentUtterance) + '</b> ' : '') +
+      escapeHtml(interim);
+    scheduleFlush(true);
+  };
+
+  r.onerror = (e) => {
+    console.warn('SR error', e.error);
+    if(e.error === 'no-speech' || e.error === 'network'){
+      // se reinicia solo
+    }
+  };
+
+  r.onend = () => {
+    if(state.listening){
+      try{ r.start(); }catch(e){}
+    }
+  };
+
+  return r;
+}
+
+// Envía la frase acumulada tras una pausa corta de silencio (permite frases seguidas)
+let flushTimer = null;
+function scheduleFlush(soft){
+  clearTimeout(flushTimer);
+  const delay = soft ? 900 : 600;
+  flushTimer = setTimeout(() => {
+    if(currentUtterance.trim().length > 0){
+      const text = currentUtterance.trim();
+      currentUtterance = '';
+      document.getElementById('transcript').innerHTML = '<b>' + escapeHtml(text) + '</b>';
+      handleQuestion(text);
+    }
+  }, delay);
+}
+
+/* ============ CONTROLES ============ */
+async function setListening(on){
+  const pill = document.getElementById('statusPill');
+  const btn = document.getElementById('btn-mic');
+  const t = document.getElementById('transcript');
+
+  if(on){
+    if(!window.isSecureContext){
+      t.innerHTML = '⚠️ <b>Esta página no está en HTTPS.</b> Los móviles bloquean el micrófono en archivos abiertos localmente. Abre el enlace directamente en Chrome (no lo descargues) o alójalo en un hosting con HTTPS.';
+      return;
+    }
+    try{
+      // Fuerza la petición de permiso explícitamente (más fiable que confiar solo en SpeechRecognition)
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      stream.getTracks().forEach(tr => tr.stop());
+    }catch(err){
+      t.innerHTML = '⚠️ Permiso de micrófono denegado o no disponible: ' + err.name + '. Revisa Ajustes del sitio en Chrome > Micrófono.';
+      return;
+    }
+    state.listening = true;
+    if(!recognition) recognition = setupRecognition();
+    if(recognition){
+      try{ recognition.start(); }catch(e){ t.innerHTML = '⚠️ Error al iniciar reconocimiento: ' + e.message; return; }
+    }
+    pill.className = 'status-pill live';
+    document.getElementById('statusText').textContent = 'Escuchando';
+    btn.textContent = 'Detener';
+    btn.classList.remove('off');
+  } else {
+    state.listening = false;
+    if(recognition){ try{ recognition.stop(); }catch(e){} }
+    pill.className = 'status-pill off';
+    document.getElementById('statusText').textContent = 'Apagado';
+    btn.textContent = 'Escuchar';
+    btn.classList.add('off');
+  }
+}
+
+document.getElementById('btn-mic').addEventListener('click', () => setListening(!state.listening));
+
+document.getElementById('btn-pass').addEventListener('click', () => {
+  const idx = state.currentSlotIndex !== -1 ? state.currentSlotIndex : state.slots.findIndex(s => s.status === 'empty');
+  if(idx === -1) return;
+  state.slots[idx].status = 'pass';
+  if(!state.slots[idx].answer) state.slots[idx].answer = 'Sin datos';
+  renderGrid();
+});
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+  const allFirstRoundDone = state.slots.slice(0, MAX_SLOTS_ROUND1).every(s => s.status !== 'empty');
+  const anyPass = state.slots.some(s => s.status === 'pass');
+  if(state.round === 1 && allFirstRoundDone && anyPass){
+    state.round = 2; // siguiente detección buscará huecos "pass" para emparejar
+    document.getElementById('transcript').innerHTML = 'Ronda 2: repreguntas activas.';
+  } else {
+    resetState();
+    document.getElementById('transcript').innerHTML = 'Nueva ronda lista. Pulsa Escuchar.';
+  }
+});
+</script>
+</body>
+</html>
