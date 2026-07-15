@@ -294,7 +294,7 @@ async function handleQuestion(rawText){
 let recognition = null;
 let restartTimer = null;
 
-function setupRecognition(){
+function buildRecognitionInstance(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if(!SR){
     document.getElementById('transcript').innerHTML = '⚠️ Este navegador no soporta reconocimiento de voz. Usa Chrome en Android.';
@@ -302,14 +302,13 @@ function setupRecognition(){
   }
   const r = new SR();
   r.lang = 'es-ES';
-  r.continuous = false;      // el modo continuo de Chrome/Android repite y acumula texto - lo evitamos
+  r.continuous = false;
   r.interimResults = true;
   r.maxAlternatives = 1;
 
   r.onresult = (event) => {
     let finalText = '';
     let interim = '';
-    // Con continuous=false cada sesión empieza en índice 0: no hay arrastre de sesiones anteriores
     for(let i = 0; i < event.results.length; i++){
       const res = event.results[i];
       if(res.isFinal) finalText += res[0].transcript;
@@ -319,27 +318,32 @@ function setupRecognition(){
       (finalText ? '<b>' + escapeHtml(finalText) + '</b> ' : '') + escapeHtml(interim);
 
     if(finalText.trim().length > 0){
-      const text = finalText.trim();
-      handleQuestion(text);
+      handleQuestion(finalText.trim());
     }
   };
 
   r.onerror = (e) => {
     console.warn('SR error', e.error);
-    // 'no-speech' y 'aborted' son normales al reiniciar constantemente, se ignoran
   };
 
   r.onend = () => {
-    // Reinicia casi al instante para no perder ninguna pregunta
     if(state.listening){
       clearTimeout(restartTimer);
-      restartTimer = setTimeout(() => {
-        try{ r.start(); }catch(e){}
-      }, 80);
+      restartTimer = setTimeout(restartRecognitionFresh, 250);
     }
   };
 
   return r;
+}
+
+// Objeto nuevo cada vez: reutilizar el mismo objeto en Android arrastra estado interno y provoca
+// que el texto se repita/acumule entre sesiones.
+function restartRecognitionFresh(){
+  if(!state.listening) return;
+  recognition = buildRecognitionInstance();
+  if(recognition){
+    try{ recognition.start(); }catch(e){}
+  }
 }
 
 /* ============ CONTROLES ============ */
@@ -362,7 +366,7 @@ async function setListening(on){
       return;
     }
     state.listening = true;
-    if(!recognition) recognition = setupRecognition();
+    if(!recognition) recognition = buildRecognitionInstance();
     if(recognition){
       try{ recognition.start(); }catch(e){ t.innerHTML = '⚠️ Error al iniciar reconocimiento: ' + e.message; return; }
     }
